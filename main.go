@@ -17,6 +17,7 @@ import (
 )
 
 var (
+	// TODO(stgleb): Change name to kubeconfig
 	kubeConfigPath = flag.String("config-path", ".kube/config", "path to kubeconfig file")
 	pattern        = flag.String("pattern", "qbox/qbox-docker:6.2.1", "pattern for recognizing elasticsearch containers")
 
@@ -33,10 +34,11 @@ var (
 func main() {
 	flag.Parse()
 
+	//  TODO(stgleb): Extract getting client set to separate function
 	configBytes, err := ioutil.ReadFile(*kubeConfigPath)
 
 	if err != nil {
-		log.Fatalf("error reading file %s %v", kubeConfigPath, err)
+		log.Fatalf("error reading file %s %v", *kubeConfigPath, err)
 	}
 
 	kubeConfig, err := clientcmd.Load([]byte(configBytes))
@@ -62,6 +64,7 @@ func main() {
 		log.Fatalf("create client set %v", err)
 	}
 
+	// TODO(stgleb): extract analyze of single namespace to separate function
 	nsList, err := clientSet.CoreV1().Namespaces().List(metav1.ListOptions{})
 
 	if err != nil {
@@ -89,6 +92,7 @@ func main() {
 		}
 	}
 
+	// TODO(stgleb): extract rendering to separate function
 	cpuRatio := float64(esCpu) / float64(totalCpu)
 	memoryRatio := float64(esMemory) / float64(totalMemory)
 
