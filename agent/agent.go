@@ -1,15 +1,15 @@
-package main
+package agent
 
 import (
 	"flag"
 	"fmt"
+	"github.com/pkg/errors"
 	"io/ioutil"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/jedib0t/go-pretty/table"
-	"github.com/sirupsen/logrus"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -17,10 +17,6 @@ import (
 )
 
 var (
-	// TODO(stgleb): Change name to kubeconfig
-	kubeConfigPath = flag.String("config-path", ".kube/config", "path to kubeconfig file")
-	pattern        = flag.String("pattern", "qbox/qbox-docker:6.2.1", "pattern for recognizing elasticsearch containers")
-
 	esCpu    int
 	esMemory int
 
@@ -31,20 +27,20 @@ var (
 	totalCount int
 )
 
-func main() {
+func Run(kubeConfigPath, pattern string) error {
 	flag.Parse()
 
 	//  TODO(stgleb): Extract getting client set to separate function
-	configBytes, err := ioutil.ReadFile(*kubeConfigPath)
+	configBytes, err := ioutil.ReadFile(kubeConfigPath)
 
 	if err != nil {
-		log.Fatalf("error reading file %s %v", *kubeConfigPath, err)
+		return errors.Wrapf(err, "error reading file %s %v", kubeConfigPath)
 	}
 
 	kubeConfig, err := clientcmd.Load([]byte(configBytes))
 
 	if err != nil {
-		logrus.Fatalf("can't load kubernetes config %v", err)
+		return errors.Wrapf(err, "can't load kubernetes config %v")
 	}
 
 	restConf, err := clientcmd.NewNonInteractiveClientConfig(
@@ -55,7 +51,7 @@ func main() {
 	).ClientConfig()
 
 	if err != nil {
-		log.Fatalf("create rest config %v", err)
+		return errors.Wrapf(err, "create rest config %v")
 	}
 
 	clientSet, err := kubernetes.NewForConfig(restConf)
@@ -68,18 +64,18 @@ func main() {
 	nsList, err := clientSet.CoreV1().Namespaces().List(metav1.ListOptions{})
 
 	if err != nil {
-		log.Fatalf("list namespaces %v", err)
+		return errors.Wrapf(err, "list namespaces")
 	}
 
 	for _, ns := range nsList.Items {
 		podList, err := clientSet.CoreV1().Pods(ns.Name).List(metav1.ListOptions{})
 		if err != nil {
-			panic(err.Error())
+			return errors.Wrapf(err, "error getting list of pods")
 		}
 
 		for _, pod := range podList.Items {
 			for _, container := range pod.Spec.Containers {
-				if strings.Contains(container.Image, *pattern) {
+				if strings.Contains(container.Image, pattern) {
 					esCpu += container.Resources.Limits.Cpu().Size()
 					esMemory += container.Resources.Limits.Memory().Size()
 					esCount += 1
@@ -105,4 +101,5 @@ func main() {
 	})
 
 	t.Render()
+	return nil
 }
