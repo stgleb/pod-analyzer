@@ -30,6 +30,9 @@ var (
 func Run(kubeConfigPath, pattern string) error {
 	flag.Parse()
 
+	containerCpuInfo := make(map[string]int)
+	containerMemoryInfo := make(map[string]int)
+
 	//  TODO(stgleb): Extract getting client set to separate function
 	configBytes, err := ioutil.ReadFile(kubeConfigPath)
 
@@ -75,6 +78,9 @@ func Run(kubeConfigPath, pattern string) error {
 
 		for _, pod := range podList.Items {
 			for _, container := range pod.Spec.Containers {
+				containerCpuInfo[container.Image] += container.Resources.Limits.Cpu().Size()
+				containerMemoryInfo[container.Image] += container.Resources.Limits.Memory().Size()
+
 				if strings.Contains(container.Image, pattern) {
 					esCpu += container.Resources.Limits.Cpu().Size()
 					esMemory += container.Resources.Limits.Memory().Size()
@@ -94,11 +100,21 @@ func Run(kubeConfigPath, pattern string) error {
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"#", "Total CPU", "Total Memory", "Target CPU", "Target Memory", "CPU %", "Memory %s"})
+	t.AppendHeader(table.Row{"#", "Name", "Memory", "CPU"})
 	t.AppendRows([]table.Row{
-		{1, totalCpu, totalMemory, esCpu, esMemory,
-			fmt.Sprintf("%.2f", cpuRatio), fmt.Sprintf("%.2f", memoryRatio)},
+		{1, "Total", totalCpu, totalMemory},
+		{2, "Target", esCpu, esMemory},
+		{3, "Ratio", fmt.Sprintf("%.2f", cpuRatio), fmt.Sprintf("%.2f", memoryRatio)},
 	})
+
+	i := 4
+
+	for imageName := range containerCpuInfo {
+		cpuValue := containerCpuInfo[imageName]
+		memoryValue := containerMemoryInfo[imageName]
+		t.AppendRows([]table.Row{{i, imageName, cpuValue, memoryValue}})
+		i++
+	}
 
 	t.Render()
 	return nil
