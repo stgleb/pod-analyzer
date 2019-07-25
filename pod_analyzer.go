@@ -31,11 +31,10 @@ var (
 	pattern        = flag.String("pattern", "qbox/qbox-docker:6.2.1", "pattern for recognizing elasticsearch containers")
 )
 
-func copyAgentBinary(host, pathToLocalFile, pathToRemoteFile string, clientConfig *ssh.ClientConfig) error {
+func copyAgentBinary(host, pathToLocalFile, pathToRemoteFile string, clientConfig *ssh.ClientConfig) (err error) {
 	client := scp.NewClient(fmt.Sprintf("%s:22", host), clientConfig)
-
 	// Connect to the remote server
-	err := client.Connect()
+	err = client.Connect()
 	if err != nil {
 		return errors.Wrapf(err, "Couldn't establish a connection to the remote server ")
 	}
@@ -47,7 +46,12 @@ func copyAgentBinary(host, pathToLocalFile, pathToRemoteFile string, clientConfi
 	defer client.Close()
 
 	// Close the file after it has been copied
-	defer f.Close()
+	defer func() {
+		if e := f.Close(); e != nil {
+			log.Printf("error while closing %v", e)
+			err = e
+		}
+	}()
 
 	err = client.CopyFile(f, pathToRemoteFile, "0755")
 
