@@ -17,11 +17,17 @@ import (
 )
 
 var (
-	esCpu    int
-	esMemory int
+	esCpuLimits    int
+	esMemoryLimits int
 
-	totalCpu    int
-	totalMemory int
+	totalCpuLimits    int
+	totalMemoryLimits int
+
+	esCpuRequests    int
+	esMemoryRequests int
+
+	totalCpuRequests    int
+	totalMemoryRequests int
 
 	esCount    int
 	totalCount int
@@ -30,10 +36,6 @@ var (
 func Run(kubeConfigPath, pattern string) error {
 	flag.Parse()
 
-	containerCpuInfo := make(map[string]int)
-	containerMemoryInfo := make(map[string]int)
-
-	//  TODO(stgleb): Extract getting client set to separate function
 	configBytes, err := ioutil.ReadFile(kubeConfigPath)
 
 	if err != nil {
@@ -63,7 +65,6 @@ func Run(kubeConfigPath, pattern string) error {
 		log.Fatalf("create client set %v", err)
 	}
 
-	// TODO(stgleb): extract analyze of single namespace to separate function
 	nsList, err := clientSet.CoreV1().Namespaces().List(metav1.ListOptions{})
 
 	if err != nil {
@@ -78,43 +79,44 @@ func Run(kubeConfigPath, pattern string) error {
 
 		for _, pod := range podList.Items {
 			for _, container := range pod.Spec.Containers {
-				containerCpuInfo[container.Image] += container.Resources.Limits.Cpu().Size()
-				containerMemoryInfo[container.Image] += container.Resources.Limits.Memory().Size()
+				container.Resources.Requests.Cpu().Size()
 
 				if strings.Contains(container.Image, pattern) {
-					esCpu += container.Resources.Limits.Cpu().Size()
-					esMemory += container.Resources.Limits.Memory().Size()
+					esCpuLimits += container.Resources.Limits.Cpu().Size()
+					esMemoryLimits += container.Resources.Limits.Memory().Size()
+
+					esCpuRequests += container.Resources.Requests.Cpu().Size()
+					esMemoryRequests += container.Resources.Requests.Memory().Size()
+
 					esCount += 1
 				}
 
-				totalCpu += container.Resources.Limits.Cpu().Size()
-				totalMemory += container.Resources.Limits.Memory().Size()
+				totalCpuLimits += container.Resources.Limits.Cpu().Size()
+				totalMemoryLimits += container.Resources.Limits.Memory().Size()
+
+				totalCpuRequests += container.Resources.Requests.Cpu().Size()
+				totalMemoryRequests += container.Resources.Requests.Memory().Size()
+
 				totalCount += 1
 			}
 		}
 	}
 
-	// TODO(stgleb): extract rendering to separate function
-	cpuRatio := float64(esCpu) / float64(totalCpu)
-	memoryRatio := float64(esMemory) / float64(totalMemory)
+	cpuLimitRatio := float64(esCpuLimits) / float64(totalCpuLimits)
+	memoryLimitRatio := float64(esMemoryLimits) / float64(totalMemoryLimits)
+
+	cpuReqRatio := float64(esCpuRequests) / float64(totalCpuRequests)
+	memoryReqRatio := float64(esMemoryRequests) / float64(totalCpuRequests)
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"#", "Name", "Memory", "CPU"})
+	t.AppendHeader(table.Row{"#", "Name", "Memory Limits", "CPU Limits", "Memory Requests", "CPU requests"})
 	t.AppendRows([]table.Row{
-		{1, "Total", totalCpu, totalMemory},
-		{2, "Target", esCpu, esMemory},
-		{3, "Ratio", fmt.Sprintf("%.2f", cpuRatio), fmt.Sprintf("%.2f", memoryRatio)},
+		{1, "Total", totalCpuLimits, totalMemoryLimits, totalMemoryRequests, totalMemoryRequests},
+		{2, "Target", esCpuLimits, esMemoryLimits, esMemoryRequests, esCpuRequests},
+		{3, "Ratio", fmt.Sprintf("%.2f", cpuLimitRatio), fmt.Sprintf("%.2f", memoryLimitRatio),
+			fmt.Sprintf("%.2f", cpuReqRatio), fmt.Sprintf("%.2f", memoryReqRatio)},
 	})
-
-	i := 4
-
-	for imageName := range containerCpuInfo {
-		cpuValue := containerCpuInfo[imageName]
-		memoryValue := containerMemoryInfo[imageName]
-		t.AppendRows([]table.Row{{i, imageName, cpuValue, memoryValue}})
-		i++
-	}
 
 	t.Render()
 	return nil
