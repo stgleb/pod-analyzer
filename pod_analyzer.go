@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"io"
+	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"time"
 
@@ -17,12 +20,11 @@ import (
 )
 
 var (
-	regionListFileName = flag.String("regionListFileName", "regions.txt", "list of regions")
-	username           = flag.String("username", "user", "user name for ssh login")
-	password           = flag.String("password", "1234", "password for user")
-	outputFile         = flag.String("output", "out.csv", "name of csv output file")
-	mode               = flag.String("mode", "server", "mode server(default) and agent for grabbing info")
-	pathToRemoteFile   = flag.String("remoteBin", "/tmp/agent", "path to remote binary")
+	hostsFileName    = flag.String("hosts", "hosts.txt", "list of hosts")
+	username         = flag.String("username", "root", "user name for ssh login")
+	privateKeyFile   = flag.String("privateKey", "/home/stgleb/.ssh/id_rsa", "path to rsa private key")
+	mode             = flag.String("mode", "server", "mode server(default) and agent for grabbing info")
+	pathToRemoteFile = flag.String("remoteBin", "/tmp/agent", "path to remote binary")
 
 	// Agent params
 	kubeConfigPath = flag.String("config-path", ".kube/config", "path to kubeconfig file")
@@ -56,7 +58,7 @@ func copyAgentBinary(host, pathToLocalFile, pathToRemoteFile string, clientConfi
 	return nil
 }
 
-func readRegions(fileName string) ([]string, error) {
+func readHosts(fileName string) ([]string, error) {
 	var list []string
 
 	file, err := os.Open(fileName)
@@ -81,68 +83,94 @@ func readRegions(fileName string) ([]string, error) {
 }
 
 func analyzeClusters() {
+	privateKeyBytes, err := ioutil.ReadFile(*privateKeyFile)
+
+	if err != nil {
+		log.Fatalf("read private key %s error %v", *privateKeyFile, err)
+	}
+
+	key, err := ssh.ParsePrivateKey(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("error parse private key")
+	}
+
 	// Setup configuration for SSH client
 	config := &ssh.ClientConfig{
-		Timeout: time.Second * 10,
-		User:    *username,
+		User: *username,
 		Auth: []ssh.AuthMethod{
-			ssh.Password(*password),
+			ssh.PublicKeys(key),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout: 30 * time.Second,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			logrus.Debugf("hostname %s,addr %s key %s", hostname, remote.String(), string(key.Type()))
+			return nil
+		},
+		BannerCallback: func(message string) error {
+			logrus.Debug(message)
+			return nil
+		},
 	}
 
-	regionList, err := readRegions(*regionListFileName)
+	hostList, err := readHosts(*hostsFileName)
 
 	if err != nil {
-		log.Fatalf("err reading region regionListFileName %v", err)
+		log.Fatalf("err reading host hostsFileName %v", err)
 	}
 
-	outputFile, err := os.OpenFile(*outputFile, os.O_RDWR|os.O_CREATE, 600)
-
-	if err != nil {
-		log.Fatalf("open output file %v\n", err)
-	}
-
-	for _, region := range regionList {
+	for _, host := range hostList {
 		pathToLocalFile, err := os.Executable()
 
 		if err != nil {
 			log.Fatalf("find path to local file %v", err)
 		}
 
-		if err := copyAgentBinary(region, pathToLocalFile, *pathToRemoteFile, config); err != nil {
-			log.Fatalf("error copying binary %s to remote server %s:%s %v")
+		log.Printf("Copying binary %s to remote host %s", pathToLocalFile, host)
+		if err := copyAgentBinary(host, pathToLocalFile, *pathToRemoteFile, config); err != nil {
+			log.Fatalf("error copying binary %s to remote server %s:%s %v", pathToLocalFile, host,
+				*pathToRemoteFile, err)
 		}
 
-		conn, err := ssh.Dial("tcp", fmt.Sprintf("%s:22", region), config)
+		conn, err := ssh.Dial("tcp", fmt.Sprintf("%s:22", host), config)
 
 		if err != nil {
-			log.Printf("error connect to region %s %v\n", region, err)
+			log.Printf("error connect to host %s %v\n", host, err)
 			continue
 		}
 
 		session, err := conn.NewSession()
 
 		if err != nil {
-			log.Printf("error open session to region %s %v\n", region, err)
+			log.Printf("error open session to host %s %v\n", host, err)
 			continue
 		}
 
-		stdin, err := session.StdoutPipe()
+		stdout, err := session.StdoutPipe()
 
 		if err != nil {
-			log.Printf("error getting stdout pipe for %s %v\n", region, err)
+			log.Printf("error getting stdout pipe for %s %v\n", host, err)
 			continue
 		}
 
-		command := fmt.Sprintf("%s -config-path=%s -pattern=%s", *pathToRemoteFile, *kubeConfigPath, *pattern)
-
+		command := fmt.Sprintf("%s -config-path=%s -pattern=%s -mode=agent", *pathToRemoteFile, *kubeConfigPath, *pattern)
+		log.Printf("Host %s:22 Execute commanf %s", host, command)
 		if err := session.Run(command); err != nil {
 			log.Printf("error executing command %s %v", command, err)
 			continue
 		}
 
-		go io.Copy(outputFile, stdin)
+		ch := make(chan error)
+		go func() {
+			_, err := io.Copy(os.Stdout, stdout)
+			ch <- err
+			close(ch)
+		}()
+
+		select {
+		case <-ch:
+			log.Printf("finished")
+		case <-time.After(time.Minute * 5):
+			log.Printf("timeout")
+		}
 	}
 }
 
