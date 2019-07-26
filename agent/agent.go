@@ -3,13 +3,13 @@ package agent
 import (
 	"flag"
 	"fmt"
-	"github.com/pkg/errors"
 	"io/ioutil"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/jedib0t/go-pretty/table"
+	"github.com/pkg/errors"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -71,6 +71,12 @@ func Run(kubeConfigPath, pattern string) error {
 		return errors.Wrapf(err, "list namespaces")
 	}
 
+	containerCpuLimitInfo := make(map[string]int)
+	containerMemoryLimitInfo := make(map[string]int)
+
+	containerCpuRequestInfo := make(map[string]int)
+	containerMemoryRequestInfo := make(map[string]int)
+
 	for _, ns := range nsList.Items {
 		podList, err := clientSet.CoreV1().Pods(ns.Name).List(metav1.ListOptions{})
 		if err != nil {
@@ -90,7 +96,14 @@ func Run(kubeConfigPath, pattern string) error {
 
 					esCount += 1
 				}
+				// Aggregate info about each container  image and usage
+				containerCpuLimitInfo[container.Image] += container.Resources.Limits.Cpu().Size()
+				containerMemoryLimitInfo[container.Image] += container.Resources.Limits.Memory().Size()
 
+				containerCpuRequestInfo[container.Image] += container.Resources.Requests.Cpu().Size()
+				containerMemoryRequestInfo[container.Image] += container.Resources.Requests.Memory().Size()
+
+				// Count total amount of resources used limit/requests
 				totalCpuLimits += container.Resources.Limits.Cpu().Size()
 				totalMemoryLimits += container.Resources.Limits.Memory().Size()
 
@@ -117,6 +130,15 @@ func Run(kubeConfigPath, pattern string) error {
 		{3, "Ratio", fmt.Sprintf("%.2f", cpuLimitRatio), fmt.Sprintf("%.2f", memoryLimitRatio),
 			fmt.Sprintf("%.2f", cpuReqRatio), fmt.Sprintf("%.2f", memoryReqRatio)},
 	})
+
+	i := 4
+	for imageName := range containerCpuLimitInfo {
+		t.AppendRows([]table.Row{
+			{i, imageName, containerMemoryLimitInfo[imageName], containerCpuLimitInfo[imageName],
+				containerMemoryRequestInfo[imageName], containerCpuRequestInfo[imageName]},
+		})
+		i++
+	}
 
 	t.Render()
 	return nil
