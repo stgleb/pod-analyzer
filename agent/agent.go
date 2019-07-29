@@ -141,6 +141,7 @@ func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
 						detailedInfo[ns.Name][pod.Name] = make(map[string]v1.ResourceRequirements)
 					}
 				}
+				log.Println(detailedInfo)
 				// Grab detailed info about resource usages
 				detailedInfo[ns.Name][pod.Name][container.Image] = container.Resources
 				totalCount += 1
