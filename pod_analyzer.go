@@ -25,6 +25,8 @@ var (
 	privateKeyFile   = flag.String("privateKey", "/home/stgleb/.ssh/id_rsa", "path to rsa private key")
 	mode             = flag.String("mode", "server", "mode server(default) and agent for grabbing info")
 	pathToRemoteFile = flag.String("remoteBin", "/tmp/agent", "path to remote binary")
+	outputFileName = flag.String("output", "", "path to result file, default stdout")
+	report = flag.Bool("report", false, "make a report to report.json file")
 
 	// Agent params
 	kubeConfigPath = flag.String("config-path", ".kube/config", "path to kubeconfig file")
@@ -184,7 +186,7 @@ func main() {
 	if *mode == "server" {
 		analyzeClusters()
 	} else {
-		if err := agent.Run(*kubeConfigPath, *pattern); err != nil {
+		if err := agent.Run(*kubeConfigPath, *pattern, *outputFileName, *report); err != nil {
 			log.Fatalf("error running agent %v", err)
 		}
 	}

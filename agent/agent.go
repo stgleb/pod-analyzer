@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"github.com/jedib0t/go-pretty/table"
 	"github.com/pkg/errors"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -33,19 +36,25 @@ var (
 	totalCount int
 )
 
-func Run(kubeConfigPath, pattern string) error {
-	flag.Parse()
+func getOutputWriter(outputFileName string) (io.WriteCloser, error) {
+	if len(outputFileName) == 0 {
+		return os.Stdout, nil
+	}
 
+	return os.OpenFile(outputFileName, os.O_CREATE|os.O_RDWR, 555)
+}
+
+func getClientSet(kubeConfigPath string) (*kubernetes.Clientset, error) {
 	configBytes, err := ioutil.ReadFile(kubeConfigPath)
 
 	if err != nil {
-		return errors.Wrapf(err, "error reading file %s %v", kubeConfigPath)
+		return nil, errors.Wrapf(err, "error reading file %s %v", kubeConfigPath)
 	}
 
 	kubeConfig, err := clientcmd.Load([]byte(configBytes))
 
 	if err != nil {
-		return errors.Wrapf(err, "can't load kubernetes config %v")
+		return nil, errors.Wrapf(err, "can't load kubernetes config %v")
 	}
 
 	restConf, err := clientcmd.NewNonInteractiveClientConfig(
@@ -56,13 +65,25 @@ func Run(kubeConfigPath, pattern string) error {
 	).ClientConfig()
 
 	if err != nil {
-		return errors.Wrapf(err, "create rest config %v")
+		return nil, errors.Wrapf(err, "create rest config %v")
 	}
 
 	clientSet, err := kubernetes.NewForConfig(restConf)
 
 	if err != nil {
 		log.Fatalf("create client set %v", err)
+	}
+
+	return clientSet, nil
+}
+
+func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
+	flag.Parse()
+
+	clientSet, err := getClientSet(kubeConfigPath)
+
+	if err != nil {
+		return errors.Wrapf(err, "get client set")
 	}
 
 	nsList, err := clientSet.CoreV1().Namespaces().List(metav1.ListOptions{})
@@ -76,6 +97,8 @@ func Run(kubeConfigPath, pattern string) error {
 
 	containerCpuRequestInfo := make(map[string]int)
 	containerMemoryRequestInfo := make(map[string]int)
+
+	detailedInfo := make(map[string]map[string]map[string]v1.ResourceRequirements)
 
 	for _, ns := range nsList.Items {
 		podList, err := clientSet.CoreV1().Pods(ns.Name).List(metav1.ListOptions{})
@@ -110,6 +133,16 @@ func Run(kubeConfigPath, pattern string) error {
 				totalCpuRequests += container.Resources.Requests.Cpu().Size()
 				totalMemoryRequests += container.Resources.Requests.Memory().Size()
 
+				// Ensure that maps are  non-nil
+				if detailedInfo[ns.Name] == nil {
+					detailedInfo[ns.Name] = make(map[string]map[string]v1.ResourceRequirements)
+
+					if detailedInfo[ns.Name][pod.Name] == nil {
+						detailedInfo[ns.Name][pod.Name] = make(map[string]v1.ResourceRequirements)
+					}
+				}
+				// Grab detailed info about resource usages
+				detailedInfo[ns.Name][pod.Name][container.Image] = container.Resources
 				totalCount += 1
 			}
 		}
@@ -121,6 +154,27 @@ func Run(kubeConfigPath, pattern string) error {
 	cpuReqRatio := float64(esCpuRequests) / float64(totalCpuRequests)
 	memoryReqRatio := float64(esMemoryRequests) / float64(totalCpuRequests)
 
+	if f, err := getOutputWriter(outputFileName); err == nil {
+		renderCSV(f, cpuLimitRatio, memoryLimitRatio, cpuReqRatio, memoryReqRatio,
+			containerCpuLimitInfo, containerMemoryLimitInfo, containerMemoryRequestInfo, containerCpuRequestInfo)
+	} else {
+		return err
+	}
+
+	if f, err := getOutputWriter("report.json"); err == nil {
+		if err := json.NewEncoder(f).Encode(detailedInfo); err != nil {
+			return errors.Wrapf(err, "write a report")
+		}
+	} else {
+		return errors.Wrapf(err, "get writer for report")
+	}
+
+	return nil
+}
+
+func renderCSV(out io.Writer, cpuLimitRatio float64, memoryLimitRatio float64, cpuReqRatio float64,
+	memoryReqRatio float64, containerCpuLimitInfo map[string]int, containerMemoryLimitInfo map[string]int,
+	containerMemoryRequestInfo map[string]int, containerCpuRequestInfo map[string]int) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{"#", "Name", "Memory Limits", "CPU Limits", "Memory Requests", "CPU requests"})
@@ -130,7 +184,6 @@ func Run(kubeConfigPath, pattern string) error {
 		{3, "Ratio", fmt.Sprintf("%.2f", cpuLimitRatio), fmt.Sprintf("%.2f", memoryLimitRatio),
 			fmt.Sprintf("%.2f", cpuReqRatio), fmt.Sprintf("%.2f", memoryReqRatio)},
 	})
-
 	i := 4
 	for imageName := range containerCpuLimitInfo {
 		t.AppendRows([]table.Row{
@@ -139,7 +192,6 @@ func Run(kubeConfigPath, pattern string) error {
 		})
 		i++
 	}
-
-	t.Render()
-	return nil
+	t.SetOutputMirror(out)
+	t.RenderCSV()
 }
