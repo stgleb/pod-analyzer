@@ -174,7 +174,7 @@ func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
 	memoryLimitRatio := float64(esMemoryLimits.Value()) / float64(totalMemoryLimits.Value())
 
 	cpuReqRatio := float64(esCpuRequests.Value()) / float64(totalCpuRequests.Value())
-	memoryReqRatio := float64(esMemoryRequests.Value()) / float64(totalCpuRequests.Value())
+	memoryReqRatio := float64(esMemoryRequests.Value()) / float64(totalMemoryRequests.Value())
 
 	if f, err := getOutputWriter(outputFileName); err == nil {
 		renderCSV(f, cpuLimitRatio, memoryLimitRatio, cpuReqRatio, memoryReqRatio,
@@ -202,15 +202,17 @@ func renderCSV(out io.Writer, cpuLimitRatio float64, memoryLimitRatio float64, c
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{"#", "Name", "Memory Limits", "CPU Limits", "Memory Requests", "CPU requests"})
 	t.AppendRows([]table.Row{
-		{1, "Total", totalCpuLimits, totalMemoryLimits, totalMemoryRequests, totalMemoryRequests},
-		{2, "Target", esCpuLimits, esMemoryLimits, esMemoryRequests, esCpuRequests},
+		{1, "Total", totalMemoryLimits.String(), totalCpuLimits.String(),
+			totalMemoryRequests.String(), totalCpuLimits.String()},
+		{2, "Target", esMemoryLimits.String(), esCpuLimits.String(),
+			esMemoryRequests.String(), esCpuRequests.String()},
 		{3, "Ratio", fmt.Sprintf("%.2f", cpuLimitRatio), fmt.Sprintf("%.2f", memoryLimitRatio),
 			fmt.Sprintf("%.2f", cpuReqRatio), fmt.Sprintf("%.2f", memoryReqRatio)},
 	})
 	i := 4
 	for imageName := range containerCpuLimitInfo {
 		t.AppendRows([]table.Row{
-			{i, imageName, containerMemoryLimitInfo[imageName].Value(), containerCpuLimitInfo[imageName].String(),
+			{i, imageName, containerMemoryLimitInfo[imageName].String(), containerCpuLimitInfo[imageName].String(),
 				containerMemoryRequestInfo[imageName].String(), containerCpuRequestInfo[imageName].String()},
 		})
 		i++
