@@ -15,22 +15,24 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
-	esCpuLimits    int
-	esMemoryLimits int
+	esCpuLimits    resource.Quantity
+	esMemoryLimits resource.Quantity
 
-	totalCpuLimits    int
-	totalMemoryLimits int
+	totalCpuLimits    resource.Quantity
+	totalMemoryLimits resource.Quantity
 
-	esCpuRequests    int
-	esMemoryRequests int
+	esCpuRequests    resource.Quantity
+	esMemoryRequests resource.Quantity
 
-	totalCpuRequests    int
-	totalMemoryRequests int
+	totalCpuRequests    resource.Quantity
+	totalMemoryRequests resource.Quantity
 
 	esCount    int
 	totalCount int
@@ -92,11 +94,11 @@ func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
 		return errors.Wrapf(err, "list namespaces")
 	}
 
-	containerCpuLimitInfo := make(map[string]int)
-	containerMemoryLimitInfo := make(map[string]int)
+	containerCpuLimitInfo := make(map[string]*resource.Quantity)
+	containerMemoryLimitInfo := make(map[string]*resource.Quantity)
 
-	containerCpuRequestInfo := make(map[string]int)
-	containerMemoryRequestInfo := make(map[string]int)
+	containerCpuRequestInfo := make(map[string]*resource.Quantity)
+	containerMemoryRequestInfo := make(map[string]*resource.Quantity)
 
 	detailedInfo := make(map[string]map[string]map[string]v1.ResourceRequirements)
 
@@ -106,42 +108,61 @@ func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
 			return errors.Wrapf(err, "error getting list of pods")
 		}
 
+		// Ensure that maps are  non-nil
+		if detailedInfo[ns.Name] == nil {
+			detailedInfo[ns.Name] = make(map[string]map[string]v1.ResourceRequirements)
+		}
+
 		for _, pod := range podList.Items {
+			// Ensure that maps are  non-nil
+			if detailedInfo[ns.Name][pod.Name] == nil {
+				detailedInfo[ns.Name][pod.Name] = make(map[string]v1.ResourceRequirements)
+			}
+
 			for _, container := range pod.Spec.Containers {
 				container.Resources.Requests.Cpu().Size()
 
 				if strings.Contains(container.Image, pattern) {
-					esCpuLimits += container.Resources.Limits.Cpu().Size()
-					esMemoryLimits += container.Resources.Limits.Memory().Size()
+					esCpuLimits.Add(*container.Resources.Limits.Cpu())
+					esMemoryLimits.Add(*container.Resources.Limits.Memory())
 
-					esCpuRequests += container.Resources.Requests.Cpu().Size()
-					esMemoryRequests += container.Resources.Requests.Memory().Size()
+					esCpuRequests.Add(*container.Resources.Requests.Cpu())
+					esMemoryRequests.Add(*container.Resources.Requests.Memory())
 
 					esCount += 1
 				}
 				// Aggregate info about each container  image and usage
-				containerCpuLimitInfo[container.Image] += container.Resources.Limits.Cpu().Size()
-				containerMemoryLimitInfo[container.Image] += container.Resources.Limits.Memory().Size()
+				if containerCpuLimitInfo[container.Image] == nil {
+					containerCpuLimitInfo[container.Image] = container.Resources.Limits.Cpu()
+				} else {
+					containerCpuLimitInfo[container.Image].Add(*container.Resources.Limits.Cpu())
+				}
 
-				containerCpuRequestInfo[container.Image] += container.Resources.Requests.Cpu().Size()
-				containerMemoryRequestInfo[container.Image] += container.Resources.Requests.Memory().Size()
+				if containerMemoryLimitInfo[container.Image] == nil {
+					containerMemoryLimitInfo[container.Image] = container.Resources.Limits.Memory()
+				} else {
+					containerMemoryLimitInfo[container.Image].Add(*container.Resources.Limits.Memory())
+				}
+
+				if containerCpuRequestInfo[container.Image] == nil {
+					containerCpuRequestInfo[container.Image] = container.Resources.Requests.Cpu()
+				} else {
+					containerCpuRequestInfo[container.Image].Add(*container.Resources.Requests.Cpu())
+				}
+
+				if containerMemoryRequestInfo[container.Image] == nil {
+					containerMemoryRequestInfo[container.Image] = container.Resources.Requests.Memory()
+				} else {
+					containerMemoryRequestInfo[container.Image].Add(*container.Resources.Requests.Memory())
+				}
 
 				// Count total amount of resources used limit/requests
-				totalCpuLimits += container.Resources.Limits.Cpu().Size()
-				totalMemoryLimits += container.Resources.Limits.Memory().Size()
+				totalCpuLimits.Add(*container.Resources.Limits.Cpu())
+				totalMemoryLimits.Add(*container.Resources.Limits.Memory())
 
-				totalCpuRequests += container.Resources.Requests.Cpu().Size()
-				totalMemoryRequests += container.Resources.Requests.Memory().Size()
+				totalCpuRequests.Add(*container.Resources.Requests.Cpu())
+				totalMemoryRequests.Add(*container.Resources.Requests.Memory())
 
-				// Ensure that maps are  non-nil
-				if detailedInfo[ns.Name] == nil {
-					detailedInfo[ns.Name] = make(map[string]map[string]v1.ResourceRequirements)
-
-					if detailedInfo[ns.Name][pod.Name] == nil {
-						detailedInfo[ns.Name][pod.Name] = make(map[string]v1.ResourceRequirements)
-					}
-				}
-				log.Println(detailedInfo)
 				// Grab detailed info about resource usages
 				detailedInfo[ns.Name][pod.Name][container.Image] = container.Resources
 				totalCount += 1
@@ -149,11 +170,11 @@ func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
 		}
 	}
 
-	cpuLimitRatio := float64(esCpuLimits) / float64(totalCpuLimits)
-	memoryLimitRatio := float64(esMemoryLimits) / float64(totalMemoryLimits)
+	cpuLimitRatio := float64(esCpuLimits.Value()) / float64(totalCpuLimits.Value())
+	memoryLimitRatio := float64(esMemoryLimits.Value()) / float64(totalMemoryLimits.Value())
 
-	cpuReqRatio := float64(esCpuRequests) / float64(totalCpuRequests)
-	memoryReqRatio := float64(esMemoryRequests) / float64(totalCpuRequests)
+	cpuReqRatio := float64(esCpuRequests.Value()) / float64(totalCpuRequests.Value())
+	memoryReqRatio := float64(esMemoryRequests.Value()) / float64(totalCpuRequests.Value())
 
 	if f, err := getOutputWriter(outputFileName); err == nil {
 		renderCSV(f, cpuLimitRatio, memoryLimitRatio, cpuReqRatio, memoryReqRatio,
@@ -174,8 +195,9 @@ func Run(kubeConfigPath, pattern, outputFileName string, hasReport bool) error {
 }
 
 func renderCSV(out io.Writer, cpuLimitRatio float64, memoryLimitRatio float64, cpuReqRatio float64,
-	memoryReqRatio float64, containerCpuLimitInfo map[string]int, containerMemoryLimitInfo map[string]int,
-	containerMemoryRequestInfo map[string]int, containerCpuRequestInfo map[string]int) {
+	memoryReqRatio float64, containerCpuLimitInfo map[string]*resource.Quantity,
+	containerMemoryLimitInfo map[string]*resource.Quantity, containerMemoryRequestInfo map[string]*resource.Quantity,
+	containerCpuRequestInfo map[string]*resource.Quantity) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{"#", "Name", "Memory Limits", "CPU Limits", "Memory Requests", "CPU requests"})
@@ -188,8 +210,8 @@ func renderCSV(out io.Writer, cpuLimitRatio float64, memoryLimitRatio float64, c
 	i := 4
 	for imageName := range containerCpuLimitInfo {
 		t.AppendRows([]table.Row{
-			{i, imageName, containerMemoryLimitInfo[imageName], containerCpuLimitInfo[imageName],
-				containerMemoryRequestInfo[imageName], containerCpuRequestInfo[imageName]},
+			{i, imageName, containerMemoryLimitInfo[imageName].Value(), containerCpuLimitInfo[imageName].String(),
+				containerMemoryRequestInfo[imageName].String(), containerCpuRequestInfo[imageName].String()},
 		})
 		i++
 	}
